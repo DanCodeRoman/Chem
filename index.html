@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ChemDoom</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background: #111;
+        }
+        #game-container {
+            width: 100%;
+            height: 100vh;
+            position: relative;
+        }
+        #start-menu, #game-over {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #2c3e50, #e74c3c);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: #ecf0f1;
+            z-index: 10;
+            transition: opacity 0.5s;
+        }
+        #start-menu.hidden, #game-over.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        #start-menu h1, #game-over h1 {
+            font-size: 3em;
+            text-shadow: 3px 3px 6px rgba(0,0,0,0.7);
+            animation: pulse 1.5s infinite;
+        }
+        #start-menu p, #game-over p {
+            font-size: 1.2em;
+            max-width: 80%;
+            text-align: center;
+            margin: 20px;
+        }
+        #start-menu button, #game-over button {
+            padding: 15px 40px;
+            font-size: 1.2em;
+            margin: 10px;
+            border: none;
+            border-radius: 30px;
+            background: #3498db;
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+            transition: transform 0.2s;
+        }
+        #start-menu button:hover, #game-over button:hover {
+            transform: scale(1.05);
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            z-index: 5;
+        }
+        .joystick {
+            width: 100px;
+            height: 100px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            position: relative;
+            touch-action: none;
+        }
+        .joystick-knob {
+            width: 40px;
+            height: 40px;
+            background: #e74c3c;
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        #action-buttons button {
+            padding: 10px 20px;
+            font-size: 1em;
+            border: none;
+            border-radius: 10px;
+            background: #2ecc71;
+            color: white;
+            cursor: pointer;
+        }
+        #hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #ecf0f1;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 5;
+            font-size: 1em;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 20px;
+            height: 20px;
+            background: rgba(255, 0, 0, 0.5);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 5;
+            pointer-events: none;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="start-menu">
+            <h1>ChemDoom</h1>
+            <p>A chemical spill has mutated lab specimens into deadly creatures. Fight your way through, craft the exit key, and escape before the lab self-destructs in 120 seconds!</p>
+            <button onclick="startGame()">Start</button>
+        </div>
+        <div id="game-over" class="hidden">
+            <h1>Game Over</h1>
+            <p id="game-over-text"></p>
+            <p id="stats"></p>
+            <button onclick="restartGame()">Restart</button>
+        </div>
+        <div id="hud">Health: 100 | Ammo: 50 | Time: 120 | Inventory: Empty</div>
+        <div id="crosshair"></div>
+        <div id="controls">
+            <div id="move-joystick" class="joystick">
+                <div id="move-knob" class="joystick-knob"></div>
+            </div>
+            <div id="action-buttons">
+                <button id="shoot">Shoot</button>
+                <button id="interact">Interact</button>
+                <button id="switch-weapon">Switch Weapon</button>
+            </div>
+            <div id="aim-joystick" class="joystick">
+                <div id="aim-knob" class="joystick-knob"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script>
+        // Core game variables
+        let scene, camera, renderer, player, feet, enemies = [], chemicals = [], doors = [], hazards = [];
+        let moveX = 0, moveZ = 0, aimX = 0, aimY = 0, gameStarted = false, gameEnded = false;
+        let inventory = [], health = 100, ammo = 50, timeLeft = 120, kills = 0;
+        let currentWeapon = 'acidBlaster', weapons = {
+            acidBlaster: { damage: 20, rate: 0.2, range: 10, ammoCost: 1 },
+            flamethrower: { damage: 40, rate: 0.5, range: 5, ammoCost: 2 }
+        };
+        let lastShot = 0;
+
+        // Initialize Three.js scene
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('game-container').appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 1);
+            scene.add(ambientLight);
+            const pointLight = new THREE.PointLight(0xffffff, 1, 100);
+            pointLight.position.set(0, 10, 0);
+            scene.add(pointLight);
+
+            // Player
+            player = {
+                position: new THREE.Vector3(0, 1, 0),
+                rotation: 0,
+                pitch: 0,
+                velocity: new THREE.Vector3(),
+                speed: 0.15
+            };
+            camera.position.copy(player.position);
+            scene.add(camera);
+
+            // Feet
+            const feetGeometry = new THREE.BoxGeometry(0.4, 0.1, 0.6);
+            const feetMaterial = new THREE.MeshPhongMaterial({ color: 0x2c3e50 });
+            feet = new THREE.Mesh(feetGeometry, feetMaterial);
+            feet.position.set(0, -0.9, -0.3);
+            camera.add(feet);
+
+            // Map generation
+            generateMap();
+
+            // Chemicals
+            spawnChemicals();
+
+            // Enemies
+            spawnEnemies();
+
+            // Hazards
+            spawnHazards();
+
+            // Exit Door
+            const doorGeometry = new THREE.BoxGeometry(2, 4, 0.2);
+            const doorMaterial = new THREE.MeshPhongMaterial({ color: 0x2c3e50 });
+            const door = new THREE.Mesh(doorGeometry, doorMaterial);
+            door.position.set(18, 2, 0);
+            door.userData = { type: 'door', locked: true };
+            scene.add(door);
+            doors.push(door);
+        }
+
+        // Generate complex map
+        function generateMap() {
+            const floorMaterial = new THREE.MeshPhongMaterial({ color: 0x7f8c8d, shininess: 20 });
+            const wallMaterial = new THREE.MeshPhongMaterial({ color: 0x34495e });
+            
+            // Main floor
+            const floorGeometry = new THREE.PlaneGeometry(40, 40);
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = -Math.PI / 2;
+            scene.add(floor);
+
+            // Outer walls
+            const wallGeometry = new THREE.BoxGeometry(40, 5, 0.2);
+            const walls = [
+                { pos: [0, 2.5, -20], rot: [0, 0, 0] }, // North
+                { pos: [0, 2.5, 20], rot: [0, 0, 0] },  // South
+                { pos: [-20, 2.5, 0], rot: [0, Math.PI / 2, 0] }, // West
+                { pos: [20, 2.5, 0], rot: [0, Math.PI / 2, 0] }   // East
+            ];
+            walls.forEach(w => {
+                const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                wall.position.set(...w.pos);
+                wall.rotation.set(...w.rot);
+                scene.add(wall);
+            });
+
+            // Interior walls
+            const interiorWalls = [
+                { size: [0.2, 5, 10], pos: [5, 2.5, -5], rot: [0, 0, 0] },
+                { size: [10, 5, 0.2], pos: [10, 2.5, 0], rot: [0, 0, 0] },
+                { size: [0.2, 5, 15], pos: [-5, 2.5, 5], rot: [0, 0, 0] },
+                { size: [15, 5, 0.2], pos: [0, 2.5, 10], rot: [0, 0, 0] }
+            ];
+            interiorWalls.forEach(w => {
+                const geometry = new THREE.BoxGeometry(...w.size);
+                const wall = new THREE.Mesh(geometry, wallMaterial);
+                wall.position.set(...w.pos);
+                wall.rotation.set(...w.rot);
+                scene.add(wall);
+            });
+        }
+
+        // Spawn chemicals
+        function spawnChemicals() {
+            const chemicalData = [
+                { type: 'H2SO4', color: 0xe74c3c, pos: [-10, 0.5, -10] }, // Sulfuric Acid
+                { type: 'CH4', color: 0xf1c40f, pos: [10, 0.5, -15] },    // Methane
+                { type: 'ammo', color: 0x95a5a6, pos: [-15, 0.5, 5] }     // Ammo pickup
+            ];
+            chemicalData.forEach(data => {
+                const geometry = new THREE.CylinderGeometry(0.3, 0.3, 1, 32);
+                const material = new THREE.MeshPhongMaterial({ color: data.color });
+                const chem = new THREE.Mesh(geometry, material);
+                chem.position.set(...data.pos);
+                chem.userData = { type: data.type };
+                scene.add(chem);
+                chemicals.push(chem);
+            });
+        }
+
+        // Spawn enemies
+        function spawnEnemies() {
+            const enemyData = [
+                { pos: [5, 1, -10], health: 50, speed: 0.05 },
+                { pos: [-5, 1, 10], health: 50, speed: 0.05 },
+                { pos: [15, 1, 5], health: 70, speed: 0.04 }
+            ];
+            enemyData.forEach(data => {
+                const geometry = new THREE.SphereGeometry(0.8, 16, 16);
+                const material = new THREE.MeshPhongMaterial({ color: 0x8e44ad });
+                const enemy = new THREE.Mesh(geometry, material);
+                enemy.position.set(...data.pos);
+                enemy.userData = { 
+                    type: 'enemy', 
+                    health: data.health, 
+                    speed: data.speed, 
+                    state: 'patrol', 
+                    target: new THREE.Vector3(data.pos[0] + (Math.random() - 0.5) * 10, 1, data.pos[2] + (Math.random() - 0.5) * 10)
+                };
+                scene.add(enemy);
+                enemies.push(enemy);
+            });
+        }
+
+        // Spawn hazards
+        function spawnHazards() {
+            const hazardGeometry = new THREE.PlaneGeometry(2, 2);
+            const hazardMaterial = new THREE.MeshPhongMaterial({ color: 0x27ae60, transparent: true, opacity: 0.7 });
+            const hazardsData = [
+                { pos: [0, 0.01, -5] },
+                { pos: [-10, 0.01, 5] }
+            ];
+            hazardsData.forEach(data => {
+                const hazard = new THREE.Mesh(hazardGeometry, hazardMaterial);
+                hazard.rotation.x = -Math.PI / 2;
+                hazard.position.set(...data.pos);
+                hazard.userData = { type: 'hazard', damage: 5 };
+                scene.add(hazard);
+                hazards.push(hazard);
+            });
+        }
+
+        // Start game
+        function startGame() {
+            document.getElementById('start-menu').classList.add('hidden');
+            gameStarted = true;
+            animate();
+            setInterval(updateTimer, 1000);
+        }
+
+        // Restart game
+        function restartGame() {
+            location.reload();
+        }
+
+        // Joystick controls
+        function setupJoystick(id, callback) {
+            const joystick = document.getElementById(id);
+            const knob = joystick.querySelector('.joystick-knob');
+            let active = false;
+            joystick.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                active = true;
+                moveJoystick(e.touches[0], joystick, knob, callback);
+            });
+            joystick.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                if (active) moveJoystick(e.touches[0], joystick, knob, callback);
+            });
+            joystick.addEventListener('touchend', () => {
+                active = false;
+                callback(0, 0);
+                knob.style.left = '50%';
+                knob.style.top = '50%';
+            });
+        }
+
+        function moveJoystick(touch, joystick, knob, callback) {
+            const rect = joystick.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            let dx = touch.clientX - centerX;
+            let dy = touch.clientY - centerY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const maxDistance = rect.width / 2 - 20;
+            if (distance > maxDistance) {
+                dx *= maxDistance / distance;
+                dy *= maxDistance / distance;
+            }
+            knob.style.left = `${50 + (dx / rect.width) * 100}%`;
+            knob.style.top = `${50 + (dy / rect.height) * 100}%`;
+            callback(dx / maxDistance, dy / maxDistance);
+        }
+
+        setupJoystick('move-joystick', (x, z) => { moveX = x; moveZ = z; });
+        setupJoystick('aim-joystick', (x, y) => { aimX = x; aimY = y; });
+
+        // Action buttons
+        document.getElementById('shoot').addEventListener('touchstart', shoot);
+        document.getElementById('interact').onclick = interact;
+        document.getElementById('switch-weapon').onclick = () => {
+            currentWeapon = currentWeapon === 'acidBlaster' ? 'flamethrower' : 'acidBlaster';
+            alert(`Switched to ${currentWeapon}`);
+        };
+
+        // Shooting mechanics
+        function shoot() {
+            if (gameEnded || !gameStarted) return;
+            const now = performance.now() / 1000;
+            const weapon = weapons[currentWeapon];
+            if (now - lastShot < weapon.rate || ammo < weapon.ammoCost) return;
+
+            lastShot = now;
+            ammo -= weapon.ammoCost;
+            updateHUD();
+
+            const forward = new THREE.Vector3(0, 0, -1).applyEuler(camera.rotation);
+            const raycaster = new THREE.Raycaster(camera.position, forward);
+            const intersects = raycaster.intersectObjects(enemies);
+
+            if (intersects.length > 0 && intersects[0].distance < weapon.range) {
+                const enemy = intersects[0].object;
+                enemy.userData.health -= weapon.damage;
+                animateHit(enemy.position);
+                if (enemy.userData.health <= 0) {
+                    scene.remove(enemy);
+                    enemies = enemies.filter(e => e !== enemy);
+                    kills++;
+                    spawnExplosion(enemy.position);
+                    playSound('explosion');
+                } else {
+                    enemy.userData.state = 'chase';
+                    playSound('hit');
+                }
+            } else {
+                animateProjectile(forward, weapon.range);
+                playSound('shoot');
+            }
+        }
+
+        // Interaction
+        function interact() {
+            if (gameEnded) return;
+            const forward = new THREE.Vector3(0, 0, -1).applyEuler(camera.rotation);
+            const raycaster = new THREE.Raycaster(camera.position, forward);
+            const intersects = raycaster.intersectObjects([...chemicals, ...doors]);
+
+            if (intersects.length > 0) {
+                const obj = intersects[0].object;
+                if (obj.userData.type === 'door') {
+                    if (inventory.includes('exitKey')) {
+                        obj.userData.locked = false;
+                        obj.material.color.set(0x27ae60);
+                        endGame(true);
+                    } else {
+                        alert('Need the exit key (H2SO4 + CH4)!');
+                    }
+                } else if (chemicals.includes(obj)) {
+                    if (obj.userData.type === 'ammo') {
+                        ammo += 20;
+                        updateHUD();
+                    } else {
+                        inventory.push(obj.userData.type);
+                        craftExitKey();
+                    }
+                    scene.remove(obj);
+                    chemicals = chemicals.filter(c => c !== obj);
+                    animateCollect(obj);
+                    playSound('pickup');
+                }
+            }
+        }
+
+        // Craft exit key
+        function craftExitKey() {
+            if (inventory.includes('H2SO4') && inventory.includes('CH4')) {
+                inventory = inventory.filter(item => !['H2SO4', 'CH4'].includes(item));
+                inventory.push('exitKey');
+                animateReaction(player.position);
+                alert('Crafted the exit key!');
+                playSound('craft');
+            }
+        }
+
+        // Animation: Collect
+        function animateCollect(obj) {
+            let t = 0;
+            const startPos = obj.position.clone();
+            function spin() {
+                t += 0.1;
+                if (t < 1) {
+                    obj.position.lerpVectors(startPos, camera.position, t);
+                    obj.rotation.y += 0.3;
+                    requestAnimationFrame(spin);
+                }
+            }
+            spin();
+        }
+
+        // Animation: Projectile
+        function animateProjectile(direction, range) {
+            const geometry = new THREE.SphereGeometry(0.1, 8, 8);
+            const material = new THREE.MeshBasicMaterial({ color: currentWeapon === 'acidBlaster' ? 0xe74c3c : 0xf1c40f });
+            const projectile = new THREE.Mesh(geometry, material);
+            projectile.position.copy(camera.position);
+            scene.add(projectile);
+
+            let distance = 0;
+            function move() {
+                distance += 0.5;
+                projectile.position.add(direction.clone().multiplyScalar(0.5));
+                if (distance < range) requestAnimationFrame(move);
+                else scene.remove(projectile);
+            }
+            move();
+        }
+
+        // Animation: Hit
+        function animateHit(pos) {
+            const geometry = new THREE.BufferGeometry();
+            const vertices = [];
+            for (let i = 0; i < 50; i++) {
+                vertices.push((Math.random() - 0.5) * 0.5, Math.random() * 0.5, (Math.random() - 0.5) * 0.5);
+            }
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            const material = new THREE.PointsMaterial({ color: 0xff0000, size: 0.1 });
+            const particles = new THREE.Points(geometry, material);
+            particles.position.copy(pos);
+            scene.add(particles);
+            setTimeout(() => scene.remove(particles), 500);
+        }
+
+        // Animation: Explosion
+        function spawnExplosion(pos) {
+            const geometry = new THREE.BufferGeometry();
+            const vertices = [];
+            for (let i = 0; i < 200; i++) {
+                vertices.push((Math.random() - 0.5) * 2, Math.random() * 2, (Math.random() - 0.5) * 2);
+            }
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            const material = new THREE.PointsMaterial({ color: 0xf1c40f, size: 0.2 });
+            const explosion = new THREE.Points(geometry, material);
+            explosion.position.copy(pos);
+            scene.add(explosion);
+            let scale = 1;
+            function animateExplosion() {
+                scale += 0.1;
+                explosion.scale.setScalar(scale);
+                if (scale < 3) requestAnimationFrame(animateExplosion);
+                else scene.remove(explosion);
+            }
+            animateExplosion();
+        }
+
+        // Animation: Reaction
+        function animateReaction(pos) {
+            const geometry = new THREE.BufferGeometry();
+            const vertices = [];
+            for (let i = 0; i < 100; i++) {
+                vertices.push((Math.random() - 0.5) * 1, Math.random() * 1, (Math.random() - 0.5) * 1);
+            }
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            const material = new THREE.PointsMaterial({ color: 0x3498db, size: 0.1 });
+            const particles = new THREE.Points(geometry, material);
+            particles.position.copy(pos);
+            scene.add(particles);
+            setTimeout(() => scene.remove(particles), 1000);
+        }
+
+        // Enemy AI
+        function updateEnemies() {
+            enemies.forEach(enemy => {
+                const distanceToPlayer = enemy.position.distanceTo(player.position);
+                if (enemy.userData.state === 'patrol' && distanceToPlayer < 10) {
+                    enemy.userData.state = 'chase';
+                }
+                if (enemy.userData.state === 'chase') {
+                    const direction = player.position.clone().sub(enemy.position).normalize();
+                    enemy.position.add(direction.multiplyScalar(enemy.userData.speed));
+                    if (distanceToPlayer < 2) {
+                        health -= 5;
+                        updateHUD();
+                        playSound('hurt');
+                        if (health <= 0) endGame(false);
+                    }
+                } else {
+                    const direction = enemy.userData.target.clone().sub(enemy.position).normalize();
+                    enemy.position.add(direction.multiplyScalar(enemy.userData.speed));
+                    if (enemy.position.distanceTo(enemy.userData.target) < 1) {
+                        enemy.userData.target.set(
+                            enemy.position.x + (Math.random() - 0.5) * 10,
+                            1,
+                            enemy.position.z + (Math.random() - 0.5) * 10
+                        );
+                    }
+                }
+                enemy.position.clamp(new THREE.Vector3(-19, 1, -19), new THREE.Vector3(19, 1, 19));
+            });
+        }
+
+        // Hazard damage
+        function checkHazards() {
+            hazards.forEach(hazard => {
+                if (player.position.distanceTo(hazard.position) < 1.5) {
+                    health -= hazard.userData.damage;
+                    updateHUD();
+                    playSound('hazard');
+                    if (health <= 0) endGame(false);
+                }
+            });
+        }
+
+        // Update timer
+        function updateTimer() {
+            if (!gameStarted || gameEnded) return;
+            timeLeft--;
+            updateHUD();
+            if (timeLeft <= 0) endGame(false);
+        }
+
+        // Update HUD
+        function updateHUD() {
+            document.getElementById('hud').textContent = 
+                `Health: ${health} | Ammo: ${ammo} | Time: ${timeLeft} | Inventory: ${inventory.length ? inventory.join(', ') : 'Empty'}`;
+        }
+
+        // End game
+        function endGame(success) {
+            gameEnded = true;
+            document.getElementById('game-over').classList.remove('hidden');
+            document.getElementById('game-over-text').textContent = success
+                ? 'You escaped the lab!'
+                : 'The lab self-destructed or you died!';
+            document.getElementById('stats').textContent = `Kills: ${kills} | Time Left: ${timeLeft}`;
+        }
+
+        // Simulated sound effects
+        function playSound(type) {
+            console.log(`Playing sound: ${type}`); // Replace with actual audio if available
+        }
+
+        // Collision detection
+        function checkCollisions() {
+            const playerBox = new THREE.Box3().setFromCenterAndSize(
+                player.position,
+                new THREE.Vector3(0.5, 2, 0.5)
+            );
+            const colliders = [...walls, ...doors, ...enemies.map(e => ({
+                geometry: new THREE.SphereGeometry(0.8),
+                position: e.position
+            }))];
+            colliders.forEach(obj => {
+                const box = new THREE.Box3().setFromObject(obj);
+                if (playerBox.intersectsBox(box)) {
+                    player.position.sub(player.velocity);
+                }
+            });
+        }
+
+        // Animation loop
+        function animate() {
+            if (!gameStarted || gameEnded) return;
+            requestAnimationFrame(animate);
+
+            // Movement
+            const forward = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(0, player.rotation, 0));
+            const right = new THREE.Vector3(1, 0, 0).applyEuler(new THREE.Euler(0, player.rotation, 0));
+            player.velocity.set(0, 0, 0);
+            player.velocity.add(forward.multiplyScalar(moveZ * player.speed));
+            player.velocity.add(right.multiplyScalar(moveX * player.speed));
+            player.position.add(player.velocity);
+
+            // Aiming
+            player.rotation += aimX * 0.05;
+            player.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.pitch - aimY * 0.05));
+            camera.rotation.set(player.pitch, player.rotation, 0);
+
+            // Walking animation
+            if (moveX || moveZ) {
+                feet.position.z = -0.3 + Math.sin(Date.now() * 0.01) * 0.05;
+            }
+
+            // Clamp player position
+            player.position.clamp(new THREE.Vector3(-19, 1, -19), new THREE.Vector3(19, 1, 19));
+
+            // Update game state
+            updateEnemies();
+            checkHazards();
+            checkCollisions();
+
+            renderer.render(scene, camera);
+        }
+
+        // Initialize
+        init();
+    </script>
+</body>
+</html>
